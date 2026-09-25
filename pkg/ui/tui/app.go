@@ -89,12 +89,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		
+		// Guard against negative/zero dimensions when scaling terminal
+		listWidth := (msg.Width / 2) - 4
+		if listWidth < 0 { listWidth = 0 }
+		listHeight := msg.Height - 12
+		if listHeight < 0 { listHeight = 0 }
+
 		if m.list.Title == "" {
 			delegate := list.NewDefaultDelegate()
-			m.list = list.New([]list.Item{}, delegate, (msg.Width/2)-4, msg.Height-12)
+			m.list = list.New([]list.Item{}, delegate, listWidth, listHeight)
 			m.list.Title = "Loading Library..."
 		} else {
-			m.list.SetSize((msg.Width/2)-4, msg.Height-12)
+			m.list.SetSize(listWidth, listHeight)
 		}
 
 	case *library.Library:
@@ -111,11 +118,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd(m.cfg.VisualizerFPS)
 		
 	case tea.MouseMsg:
-		// Basic mouse support: If click is in lower portion, attempt seek mapping
-		if msg.Type == tea.MouseLeft && msg.Y > m.height-4 {
+		// Safe mouse click handling
+		if msg.Type == tea.MouseLeft && msg.Y > m.height-4 && m.width > 0 {
 			length := m.engine.Length()
 			if length > 0 {
-				// Estimate seek target based on X coordinate click relative to terminal width
 				pct := float64(msg.X) / float64(m.width)
 				target := time.Duration(float64(length) * pct)
 				m.engine.Seek(target)
@@ -177,7 +183,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.list.SetItems(newItems)
 				} else if trk, ok := selected.(trackItem); ok {
-					// Build queue from current view
 					m.engine.Queue = make([]string, 0)
 					playIdx := 0
 					for i, itm := range m.list.Items() {
@@ -191,7 +196,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		
-		// EQ Controls
 		case "h": if m.currentTab == TabEQ && m.activeEQ > 0 { m.activeEQ-- }
 		case "l": if m.currentTab == TabEQ && m.activeEQ < 4 { m.activeEQ++ }
 		case "k":
@@ -231,6 +235,11 @@ func formatDuration(d time.Duration) string {
 }
 
 func (m *Model) View() string {
+	// Guard against uninitialized or extreme tiny windows
+	if m.width <= 0 || m.height <= 0 {
+		return "Initializing UI..."
+	}
+
 	var b strings.Builder
 	tabs := []string{"[1] Player", "[2] EQ", "[3] Scopes"}
 	var renderedTabs []string
@@ -267,10 +276,12 @@ func (m *Model) View() string {
 
 	b.WriteString("\n" + strings.Repeat("─", m.width) + "\n")
 	
-	// Progress Bar and State Render
+	// Progress Bar Render Guards
 	pos := m.engine.Position()
 	ln := m.engine.Length()
-	barStr := renderProgressBar(pos, ln, m.width-30)
+	barWidth := m.width - 30
+	if barWidth < 0 { barWidth = 0 }
+	barStr := renderProgressBar(pos, ln, barWidth)
 	
 	state := "⏹ STOPPED"
 	if m.engine.IsPlaying { state = "▶ PLAYING" } else if m.engine.CurrentTrack != "" { state = "⏸ PAUSED" }
@@ -286,23 +297,38 @@ func (m *Model) View() string {
 	return b.String()
 }
 
+// ---------------------------------------------------------
+// SAFE RENDERING HELPERS
+// ---------------------------------------------------------
+
 func renderProgressBar(pos, length time.Duration, width int) string {
-	if length == 0 || width <= 0 { return strings.Repeat("-", width) }
+	if width <= 0 { return "" }
+	if length <= 0 { return strings.Repeat("-", width) }
+	
 	pct := float64(pos) / float64(length)
 	filled := int(pct * float64(width))
+	if filled < 0 { filled = 0 }
 	if filled > width { filled = width }
 	
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat("=", filled))
+	
 	if filled < width {
 		sb.WriteString(">")
-		sb.WriteString(strings.Repeat("-", width-filled-1))
+		rem := width - filled - 1
+		if rem > 0 {
+			sb.WriteString(strings.Repeat("-", rem))
+		}
 	}
 	return sb.String()
 }
 
 func renderSlider(val, min, max float64, width int) string {
+	if width <= 0 { return "" }
 	pos := int(((val - min) / (max - min)) * float64(width))
+	if pos < 0 { pos = 0 }
+	if pos >= width { pos = width - 1 }
+
 	var s strings.Builder
 	s.WriteString("[")
 	for i := 0; i < width; i++ {
@@ -312,8 +338,10 @@ func renderSlider(val, min, max float64, width int) string {
 }
 
 func renderSpectrumBars(bands []float64, height int) string {
+	if height <= 0 { return "" }
 	blocks := []string{" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
 	var lines []string
+	
 	for h := height; h > 0; h-- {
 		var line strings.Builder
 		for _, b := range bands {
@@ -326,21 +354,27 @@ func renderSpectrumBars(bands []float64, height int) string {
 }
 
 func renderVectorscope(left, right []float64, rows, cols int) string {
+	if rows <= 0 || cols <= 0 { return "" }
 	grid := make([][]rune, rows)
 	for r := range grid {
 		grid[r] = make([]rune, cols)
 		for c := range grid[r] { grid[r][c] = ' ' }
 	}
+	
 	midR, midC := rows/2, cols/2
 	points := len(left)
 	if len(right) < points { points = len(right) }
+	
 	for i := 0; i < points; i++ {
 		r := midR - int(((left[i]+right[i])*0.707)*float64(midR)*0.9)
 		c := midC + int(((left[i]-right[i])*0.707)*float64(midC)*0.9)
-		if r >= 0 && r < rows && c >= 0 && c < cols { grid[r][c] = '•' }
+		
+		if r >= 0 && r < rows && c >= 0 && c < cols { 
+			grid[r][c] = '•' 
+		}
 	}
+	
 	var sb strings.Builder
 	for r := 0; r < rows; r++ { sb.WriteString("│" + string(grid[r]) + "│\n") }
 	return sb.String()
 }
-
