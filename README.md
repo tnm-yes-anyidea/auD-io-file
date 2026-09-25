@@ -155,4 +155,4 @@ auD-io-file/
             └── app.go      # Fyne native window implementation
 
 ```
-<video src="bin/output.gif" controls="controls" muted="muted" width="100%"></video>
+<img src="bin/output.gif" width="100%" alt="Demo GIF" />
