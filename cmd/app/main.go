@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -14,10 +15,17 @@ import (
 )
 
 func main() {
-	uiFlag := flag.String("ui", "tui", "Select interface: 'tui' (Terminal) or 'gui' (Standalone App)")
+	// Auto-fix for Linux ALSA dmix deadlocks
+	if runtime.GOOS == "linux" {
+		if os.Getenv("ALSA_PCM") == "" {
+			os.Setenv("ALSA_PCM", "pulse")
+		}
+	}
+
+	uiFlag := flag.String("ui", "tui", "Select interface: 'tui' or 'gui'")
 	tierFlag := flag.String("tier", "balanced", "Memory profile: eco, balanced, studio")
 	flag.Parse()
-
+	
 	var selectedTier config.MemoryTier
 	switch *tierFlag {
 	case "eco":    selectedTier = config.TierEco
